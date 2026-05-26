@@ -1,0 +1,111 @@
+from playwright.sync_api import expect
+
+
+def _cart_badge(page):
+    return page.locator("[data-test='shopping-cart-badge']")
+
+
+def _add_products_to_cart(page, count):
+    products = page.locator("[data-test='inventory-item']")
+    expect(products).to_have_count(6)
+    for index in range(count):
+        products.nth(index).locator("button[data-test^='add-to-cart']").click()
+
+
+def test_standard_user_login_goes_to_inventory(login_as, standard_user):
+    page = login_as(standard_user)
+
+    expect(page).to_have_url("https://www.saucedemo.com/inventory.html")
+    expect(page.locator("[data-test='title']")).to_have_text("Products")
+
+
+def test_locked_out_user_sees_error(login_as, locked_out_user):
+    page = login_as(locked_out_user)
+
+    error = page.locator("[data-test='error']")
+    expect(error).to_be_visible()
+    expect(error).to_contain_text("locked out")
+
+
+def test_wrong_password_shows_relevant_error(login_as, standard_user):
+    page = login_as(standard_user, password="not_the_password")
+
+    error = page.locator("[data-test='error']")
+    expect(error).to_be_visible()
+    expect(error).to_contain_text("Username and password do not match")
+
+
+def test_inventory_lists_at_least_four_products(inventory_page):
+    products = inventory_page.locator("[data-test='inventory-item']")
+
+    expect(products).to_have_count(6)
+    assert products.count() >= 4
+
+
+def test_add_one_product_updates_cart_badge(inventory_page):
+    _add_products_to_cart(inventory_page, 1)
+
+    expect(_cart_badge(inventory_page)).to_have_text("1")
+
+
+def test_add_two_products_appear_in_cart(inventory_page):
+    item_names = inventory_page.locator("[data-test='inventory-item-name']")
+    expected_names = [item_names.nth(0).inner_text(), item_names.nth(1).inner_text()]
+
+    _add_products_to_cart(inventory_page, 2)
+    inventory_page.locator("[data-test='shopping-cart-link']").click()
+
+    expect(inventory_page).to_have_url("https://www.saucedemo.com/cart.html")
+    cart_names = inventory_page.locator("[data-test='inventory-item-name']")
+    expect(cart_names).to_have_count(2)
+    assert cart_names.all_inner_texts() == expected_names
+
+
+def test_full_checkout_flow(inventory_page):
+    _add_products_to_cart(inventory_page, 1)
+    inventory_page.locator("[data-test='shopping-cart-link']").click()
+    inventory_page.locator("[data-test='checkout']").click()
+
+    inventory_page.locator("[data-test='firstName']").fill("Ada")
+    inventory_page.locator("[data-test='lastName']").fill("Lovelace")
+    inventory_page.locator("[data-test='postalCode']").fill("12345")
+    inventory_page.locator("[data-test='continue']").click()
+    inventory_page.locator("[data-test='finish']").click()
+
+    expect(inventory_page).to_have_url("https://www.saucedemo.com/checkout-complete.html")
+    expect(inventory_page.locator("[data-test='complete-header']")).to_have_text(
+        "Thank you for your order!"
+    )
+
+
+def test_logout_returns_to_login_page(inventory_page):
+    inventory_page.locator("#react-burger-menu-btn").click()
+    inventory_page.locator("[data-test='logout-sidebar-link']").click()
+
+    expect(inventory_page).to_have_url("https://www.saucedemo.com/")
+    expect(inventory_page.locator("[data-test='login-button']")).to_be_visible()
+
+
+def test_sort_products_price_low_to_high(inventory_page):
+    inventory_page.locator("[data-test='product-sort-container']").select_option("lohi")
+
+    prices = inventory_page.locator("[data-test='inventory-item-price']").all_inner_texts()
+    numeric_prices = [float(price.replace("$", "")) for price in prices]
+    assert numeric_prices == sorted(numeric_prices)
+    assert numeric_prices[0] < numeric_prices[-1]
+
+
+def test_problem_user_cart_behavior_observation(login_as, problem_user):
+    page = login_as(problem_user)
+    expect(page).to_have_url("https://www.saucedemo.com/inventory.html")
+
+    first_two_names = page.locator("[data-test='inventory-item-name']").all_inner_texts()[:2]
+    _add_products_to_cart(page, 2)
+    expect(_cart_badge(page)).to_have_text("2")
+    page.locator("[data-test='shopping-cart-link']").click()
+
+    cart_names = page.locator("[data-test='inventory-item-name']").all_inner_texts()
+    # Observation: problem_user does not currently break this exact add-to-cart path;
+    # the badge updates and the cart contains the two selected products. The account's
+    # intentional bugs are visible in other flows, such as product imagery and checkout.
+    assert cart_names == first_two_names
